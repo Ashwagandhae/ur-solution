@@ -32,6 +32,10 @@ impl Delta {
             Some(Delta(d))
         }
     }
+
+    pub fn get(&self) -> u8 {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

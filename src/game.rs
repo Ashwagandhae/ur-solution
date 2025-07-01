@@ -101,7 +101,6 @@ impl GameState {
                 } else {
                     Move::Continue {
                         game,
-                        caused_deletion: false,
                         keep_turn: false,
                     }
                 })
@@ -117,7 +116,6 @@ impl GameState {
                     game.prot.strip.set(new_i, true);
                     Some(Move::Continue {
                         game,
-                        caused_deletion,
                         keep_turn: matches!(square, Square::Flower),
                     })
                 }
@@ -134,13 +132,62 @@ pub enum Player {
 
 #[derive(Debug, Clone)]
 pub enum Move {
-    Continue {
-        game: GameState,
-        keep_turn: bool,
-        caused_deletion: bool,
-    },
-    End {
-        prot: TeamState,
-        opp: TeamState,
-    },
+    Continue { game: GameState, keep_turn: bool },
+    End { prot: TeamState, opp: TeamState },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Roll {
+    Zero,
+    Delta(Delta),
+}
+impl Roll {
+    pub fn vals() -> [Roll; 5] {
+        [
+            Roll::Zero,
+            Roll::Delta(Delta::new(1).unwrap()),
+            Roll::Delta(Delta::new(2).unwrap()),
+            Roll::Delta(Delta::new(3).unwrap()),
+            Roll::Delta(Delta::new(4).unwrap()),
+        ]
+    }
+    pub fn iter_all() -> impl Iterator<Item = Roll> {
+        Self::vals().into_iter()
+    }
+
+    pub fn from_index(index: usize) -> Self {
+        Self::vals()[index]
+    }
+
+    pub fn weight(&self) -> f32 {
+        match self {
+            Roll::Zero => 1.0,
+            Roll::Delta(delta) if delta.get() == 1 => 4.0,
+            Roll::Delta(delta) if delta.get() == 2 => 6.0,
+            Roll::Delta(delta) if delta.get() == 3 => 4.0,
+            Roll::Delta(delta) if delta.get() == 4 => 1.0,
+            _ => unreachable!(),
+        }
+    }
+}
+
+pub fn possible_moves(game: GameState, roll: Roll) -> Vec<Move> {
+    let mut possible_moves: Vec<_> = match roll {
+        Roll::Zero => vec![Move::Continue {
+            game: game.clone(),
+            keep_turn: false,
+        }],
+        Roll::Delta(delta) => MoveSource::iter_all()
+            .filter_map(|source| game.move_piece(source, delta))
+            .collect(),
+    };
+
+    if possible_moves.is_empty() {
+        // skip turn
+        possible_moves = vec![Move::Continue {
+            game: game.clone(),
+            keep_turn: false,
+        }];
+    }
+    possible_moves
 }
