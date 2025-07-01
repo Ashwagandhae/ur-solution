@@ -1,9 +1,8 @@
 use std::io;
 
-use crate::solve::solve;
+use crate::{render::render, solve::solve};
 
 mod game;
-mod play;
 mod render;
 mod solve;
 
@@ -16,5 +15,19 @@ fn input() -> String {
 }
 
 fn main() {
-    solve();
+    let (_, states, table) = solve();
+    loop {
+        println!("Choose state to view: ");
+        let Ok(index) = input().parse::<usize>() else {
+            continue;
+        };
+        if index > states.len() {
+            continue;
+        }
+        let game = states[index];
+        let val = table.vals[index];
+        let expr = table.exprs[index].clone();
+        println!("{}", render(&game));
+        println!("val: {val}, expr: {expr:?}",);
+    }
 }

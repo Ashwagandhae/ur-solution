@@ -61,6 +61,17 @@ pub fn render(game: &GameState) -> String {
         })
         .collect();
     let prot_score = game.prot.score;
+    let prot_turn = if game.first_player_is_prot {
+        "has turn"
+    } else {
+        ""
+    };
     let opp_score = game.opp.score;
-    format!("{side_row_prot}   score: {prot_score}\n{mid_row}\n{side_row_opp}   score: {opp_score}")
+    let opp_turn = if !game.first_player_is_prot {
+        "has turn"
+    } else {
+        ""
+    };
+
+    format!("{side_row_prot}   score: {prot_score} {prot_turn} \n{mid_row}\n{side_row_opp}   score: {opp_score} {opp_turn}", )
 }

@@ -2,12 +2,13 @@ use crate::game::strip::{Delta, DeltaResult, MoveSource, Square, StripIndex, Str
 
 pub mod strip;
 
-pub const GOAL_SCORE: u8 = 3;
+pub const GOAL_SCORE: u8 = 2;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Copy)]
 pub struct GameState {
     pub prot: TeamState,
     pub opp: TeamState,
+    pub first_player_is_prot: bool,
 }
 
 impl GameState {
@@ -15,6 +16,7 @@ impl GameState {
         Self {
             prot: TeamState::new(),
             opp: TeamState::new(),
+            first_player_is_prot: true,
         }
     }
 }
@@ -66,6 +68,7 @@ impl GameState {
         GameState {
             prot: self.opp,
             opp: self.prot,
+            first_player_is_prot: !self.first_player_is_prot,
         }
     }
 
@@ -100,8 +103,7 @@ impl GameState {
                     }
                 } else {
                     Move::Continue {
-                        game,
-                        keep_turn: false,
+                        game: game.flipped(),
                     }
                 })
             }
@@ -115,8 +117,11 @@ impl GameState {
                     }
                     game.prot.strip.set(new_i, true);
                     Some(Move::Continue {
-                        game,
-                        keep_turn: matches!(square, Square::Flower),
+                        game: if matches!(square, Square::Flower) {
+                            game
+                        } else {
+                            game.flipped()
+                        },
                     })
                 }
             },
@@ -132,7 +137,7 @@ pub enum Player {
 
 #[derive(Debug, Clone)]
 pub enum Move {
-    Continue { game: GameState, keep_turn: bool },
+    Continue { game: GameState },
     End { prot: TeamState, opp: TeamState },
 }
 
@@ -174,8 +179,7 @@ impl Roll {
 pub fn possible_moves(game: GameState, roll: Roll) -> Vec<Move> {
     let mut possible_moves: Vec<_> = match roll {
         Roll::Zero => vec![Move::Continue {
-            game: game.clone(),
-            keep_turn: false,
+            game: game.flipped(),
         }],
         Roll::Delta(delta) => MoveSource::iter_all()
             .filter_map(|source| game.move_piece(source, delta))
@@ -185,8 +189,7 @@ pub fn possible_moves(game: GameState, roll: Roll) -> Vec<Move> {
     if possible_moves.is_empty() {
         // skip turn
         possible_moves = vec![Move::Continue {
-            game: game.clone(),
-            keep_turn: false,
+            game: game.flipped(),
         }];
     }
     possible_moves

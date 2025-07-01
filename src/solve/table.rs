@@ -19,23 +19,16 @@ impl Table {
                     .map(|roll| {
                         let moves = possible_moves(*game, roll);
                         if let Some(_) = moves.iter().find(|m| matches!(m, Move::End { .. })) {
-                            return RollChance::Win;
+                            return RollChance::End(game.first_player_is_prot);
                         }
                         RollChance::Combine(
                             moves
                                 .into_iter()
-                                .filter_map(|mov| {
-                                    if let Move::Continue { game, keep_turn } = mov {
-                                        Some(if keep_turn {
-                                            MaybeInverse::NoInverse(Var(state_indices[&game]))
-                                        } else {
-                                            MaybeInverse::Inverse(Var(
-                                                state_indices[&game.flipped()]
-                                            ))
-                                        })
-                                    } else {
-                                        None
-                                    }
+                                .map(|mov| {
+                                    let Move::Continue { game } = mov else {
+                                        unreachable!()
+                                    };
+                                    Var(state_indices[&game])
                                 })
                                 .map(Some)
                                 .chain(std::iter::repeat(None))
@@ -54,12 +47,11 @@ impl Table {
 
         Self { exprs, vals }
     }
-    pub fn converge(&mut self) {
+    pub fn converge(&mut self) -> f32 {
         let new_vals: Vec<_> = self
             .exprs
             .iter()
             .map(|expr| expr.eval(&self.vals))
-            .map(|val| val.clamp(0.0, 1.0))
             .collect();
         let total_delta: f32 = new_vals
             .iter()
@@ -78,13 +70,9 @@ impl Table {
         }
 
         self.vals = new_vals;
-    }
-}
 
-#[derive(Debug, Clone)]
-pub enum MaybeInverse {
-    Inverse(Var),
-    NoInverse(Var),
+        total_delta
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -93,8 +81,8 @@ pub struct Var(u32);
 
 #[derive(Debug, Clone)]
 pub enum RollChance {
-    Win,
-    Combine([Option<MaybeInverse>; 7]),
+    End(bool),
+    Combine([Option<Var>; 7]),
 }
 
 #[derive(Debug, Clone)]
@@ -109,17 +97,20 @@ impl Expr {
             .enumerate()
             .map(|(i, roll_chance)| {
                 let chance = match roll_chance {
-                    RollChance::Win => 1.0,
+                    RollChance::End(win) => {
+                        if *win {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
                     RollChance::Combine(inverses) => inverses
                         .iter()
                         .filter_map(|x| x.clone())
-                        .map(|inverse| match inverse {
-                            MaybeInverse::Inverse(Var(index)) => 1.0 - vals[index as usize],
-                            MaybeInverse::NoInverse(Var(index)) => vals[index as usize],
-                        })
+                        .map(|Var(index)| vals[index as usize])
                         .fold(f32::NEG_INFINITY, f32::max),
                 };
-                Roll::from_index(i).weight() * chance
+                Roll::from_index(i).weight() * chance / 16.0
             })
             .sum()
     }

@@ -1,3 +1,4 @@
+use core::f32;
 use std::collections::HashMap;
 
 use crate::{
@@ -7,16 +8,19 @@ use crate::{
 
 mod table;
 
-pub fn solve() {
+pub fn solve() -> (HashMap<GameState, u32>, Vec<GameState>, Table) {
     let (state_indices, states) = get_mappings();
     println!("number of states: {}", states.len());
 
     let mut table = Table::new(&state_indices, &states);
-    println!("table entry one: {:?}", table.exprs[263120]);
 
-    for _ in 0..10000 {
-        table.converge();
+    let epsilon = 1e-6;
+    let mut delta = f32::INFINITY;
+    while delta.abs() >= epsilon {
+        delta = table.converge();
     }
+
+    (state_indices, states, table)
 }
 
 fn get_mappings() -> (HashMap<GameState, u32>, Vec<GameState>) {
@@ -46,8 +50,8 @@ fn get_mappings_rec(
         state_indices.insert(game, index.try_into().expect("too many game states"));
     }
     for mov in Roll::iter_all().flat_map(|roll| possible_moves(game, roll)) {
-        if let Move::Continue { game, keep_turn } = mov {
-            state_queue.push(if keep_turn { game } else { game.flipped() });
+        if let Move::Continue { game } = mov {
+            state_queue.push(game);
         }
     }
 }
