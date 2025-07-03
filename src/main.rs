@@ -1,20 +1,21 @@
 use std::io;
 
-use crate::{render::render, solve::solve};
+use crate::{play::play, render::render, solve::solve};
 
 mod game;
+mod play;
 mod render;
 mod solve;
 
-fn input() -> String {
+pub fn input() -> String {
     let mut input = String::new();
     io::stdin()
         .read_line(&mut input)
         .expect("Failed to read line");
     input.trim().to_string()
 }
-
 fn main() {
+    // play();
     let (_, states, table) = solve();
     loop {
         println!("Choose state to view: ");

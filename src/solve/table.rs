@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
+use rayon::prelude::*;
 
 use crate::game::{possible_moves, GameState, Move, Roll};
 
 #[derive(Debug, Clone)]
 pub struct Table {
-    pub vals: Vec<f32>,
+    pub vals: Vec<f64>,
     pub exprs: Vec<Expr>,
 }
 
@@ -19,16 +20,20 @@ impl Table {
                     .map(|roll| {
                         let moves = possible_moves(*game, roll);
                         if let Some(_) = moves.iter().find(|m| matches!(m, Move::End { .. })) {
-                            return RollChance::End(game.first_player_is_prot);
+                            return RollChance::End;
                         }
                         RollChance::Combine(
                             moves
                                 .into_iter()
                                 .map(|mov| {
-                                    let Move::Continue { game } = mov else {
+                                    let Move::Continue { game, keep_turn } = mov else {
                                         unreachable!()
                                     };
-                                    Var(state_indices[&game])
+                                    MaybeInverse {
+                                        inverse: !keep_turn,
+                                        var: Var(state_indices
+                                            [&if keep_turn { game } else { game.flipped() }]),
+                                    }
                                 })
                                 .map(Some)
                                 .chain(std::iter::repeat(None))
@@ -47,28 +52,29 @@ impl Table {
 
         Self { exprs, vals }
     }
-    pub fn converge(&mut self) -> f32 {
-        let new_vals: Vec<_> = self
+    pub fn converge(&mut self) -> f64 {
+        let mut new_vals: Vec<_> = self
             .exprs
-            .iter()
+            .par_iter()
             .map(|expr| expr.eval(&self.vals))
             .collect();
-        let total_delta: f32 = new_vals
-            .iter()
-            .zip(self.vals.iter())
+        let total_delta: f64 = new_vals
+            .par_iter()
+            .zip(self.vals.par_iter())
             .map(|(x, y)| (x - y).abs())
             .sum();
+
         println!(
             "total delta: {}, average delta: {}",
             total_delta,
-            total_delta / self.vals.len() as f32
+            total_delta / self.vals.len() as f64
         );
+        new_vals[0] = new_vals[0].clamp(0.3, 0.7);
 
-        let damping = 0.5;
+        let damping = 0.8;
         for (x, &new_x) in self.vals.iter_mut().zip(new_vals.iter()) {
             *x = *x * (1.0 - damping) + new_x * damping;
         }
-
         self.vals = new_vals;
 
         total_delta
@@ -77,12 +83,17 @@ impl Table {
 
 #[derive(Debug, Clone)]
 pub struct Var(u32);
-// c * max(var...7) + c * max(var...7) + c * max(var...7) + c * max(var...7) + c * max(var...7) + k
+
+#[derive(Debug, Clone)]
+pub struct MaybeInverse {
+    inverse: bool,
+    var: Var,
+}
 
 #[derive(Debug, Clone)]
 pub enum RollChance {
-    End(bool),
-    Combine([Option<Var>; 7]),
+    End,
+    Combine([Option<MaybeInverse>; 7]),
 }
 
 #[derive(Debug, Clone)]
@@ -91,26 +102,27 @@ pub struct Expr {
 }
 
 impl Expr {
-    fn eval(&self, vals: &[f32]) -> f32 {
+    fn eval(&self, vals: &[f64]) -> f64 {
         self.roll_chances
             .iter()
             .enumerate()
             .map(|(i, roll_chance)| {
                 let chance = match roll_chance {
-                    RollChance::End(win) => {
-                        if *win {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
+                    RollChance::End => 1.0,
                     RollChance::Combine(inverses) => inverses
                         .iter()
                         .filter_map(|x| x.clone())
-                        .map(|Var(index)| vals[index as usize])
-                        .fold(f32::NEG_INFINITY, f32::max),
+                        .map(|maybe_inverse| {
+                            let val = vals[maybe_inverse.var.0 as usize];
+                            if maybe_inverse.inverse {
+                                1.0 - val
+                            } else {
+                                val
+                            }
+                        })
+                        .fold(f64::NEG_INFINITY, f64::max),
                 };
-                Roll::from_index(i).weight() * chance / 16.0
+                Roll::from_index(i).unwrap().weight() * chance / 16.0
             })
             .sum()
     }
