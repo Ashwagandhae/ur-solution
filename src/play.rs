@@ -1,5 +1,3 @@
-use std::io;
-
 use crate::{
     game::{possible_moves, GameState, Move, Roll},
     input, render,

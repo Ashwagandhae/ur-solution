@@ -94,10 +94,7 @@ impl GameState {
             DeltaResult::Score => {
                 game.prot.score += 1;
                 Some(if game.prot.score == GOAL_SCORE {
-                    Move::End {
-                        prot: game.prot,
-                        opp: game.opp,
-                    }
+                    Move::End
                 } else {
                     Move::Continue {
                         game,
@@ -133,7 +130,7 @@ pub enum Player {
 #[derive(Debug, Clone)]
 pub enum Move {
     Continue { game: GameState, keep_turn: bool },
-    End { prot: TeamState, opp: TeamState },
+    End,
 }
 
 #[derive(Debug, Clone, Copy)]

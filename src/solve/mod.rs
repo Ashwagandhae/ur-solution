@@ -5,7 +5,9 @@ use crate::{
     solve::table::Table,
 };
 
+pub mod expr;
 mod table;
+pub mod table_gpu;
 
 pub fn solve() -> (HashMap<GameState, u32>, Vec<GameState>, Table) {
     println!("creating state mappings...");
@@ -24,7 +26,7 @@ pub fn solve() -> (HashMap<GameState, u32>, Vec<GameState>, Table) {
     (state_indices, states, table)
 }
 
-fn get_mappings() -> (HashMap<GameState, u32>, Vec<GameState>) {
+pub fn get_mappings() -> (HashMap<GameState, u32>, Vec<GameState>) {
     let mut state_indices = HashMap::new();
     let mut states = Vec::new();
     let mut state_queue = vec![GameState::new()];
@@ -40,15 +42,15 @@ fn get_mappings_rec(
     state_indices: &mut HashMap<GameState, u32>,
     states: &mut Vec<GameState>,
 ) {
-    if states.len() % 100000 == 0 {
-        println!("created {} mappings", states.len());
-    }
     if state_indices.contains_key(&game) {
         return;
     } else {
         let index = states.len();
         states.push(game);
         state_indices.insert(game, index.try_into().expect("too many game states"));
+        if states.len() % 1_000_000 == 0 {
+            println!("created {} mappings", states.len());
+        }
     }
     for mov in Roll::iter_all().flat_map(|roll| possible_moves(game, roll)) {
         if let Move::Continue { game, keep_turn } = mov {
