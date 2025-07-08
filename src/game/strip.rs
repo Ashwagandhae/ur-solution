@@ -1,5 +1,7 @@
+use crate::successor::Succ;
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub struct StripState(u16);
+pub struct StripState(pub u16);
 
 impl StripState {
     pub fn new() -> Self {
@@ -17,7 +19,7 @@ impl StripState {
     }
 
     pub fn count_pieces(&self) -> u8 {
-        StripIndex::iter_all().filter(|&i| self.get(i)).count() as u8
+        StripIndex::succ_iter().filter(|&i| self.get(i)).count() as u8
     }
 }
 
@@ -38,6 +40,16 @@ impl Delta {
     }
 }
 
+impl Succ for Delta {
+    fn first() -> Self {
+        Self(1)
+    }
+
+    fn succ(&self) -> Option<Self> {
+        Self::new(self.0 + 1)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct StripIndex(u8);
 
@@ -48,9 +60,6 @@ impl StripIndex {
         } else {
             Some(StripIndex(i))
         }
-    }
-    pub fn iter_all() -> impl Iterator<Item = StripIndex> {
-        (0..14).map(StripIndex)
     }
 
     pub fn both_teams_accessible(&self) -> bool {
@@ -78,6 +87,15 @@ impl StripIndex {
     }
 }
 
+impl Succ for StripIndex {
+    fn first() -> Self {
+        Self(0)
+    }
+    fn succ(&self) -> Option<Self> {
+        Self::new(self.0 + 1)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum MoveSource {
     Launch,
@@ -91,8 +109,18 @@ impl MoveSource {
             Self::Launch => DeltaResult::Index(StripIndex::from_delta(d)),
         }
     }
-    pub fn iter_all() -> impl Iterator<Item = Self> {
-        std::iter::once(MoveSource::Launch).chain(StripIndex::iter_all().map(MoveSource::Index))
+}
+
+impl Succ for MoveSource {
+    fn first() -> Self {
+        MoveSource::Launch
+    }
+
+    fn succ(&self) -> Option<Self> {
+        match self {
+            Self::Launch => Some(Self::Index(StripIndex::first())),
+            Self::Index(index) => Some(Self::Index(index.succ()?)),
+        }
     }
 }
 

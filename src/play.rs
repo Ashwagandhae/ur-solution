@@ -1,6 +1,9 @@
+use itertools::Itertools;
+
 use crate::{
-    game::{possible_moves, GameState, Move, Roll},
-    input, render,
+    game::{GameState, Move, PossibleMovesIter, Roll},
+    input,
+    render::render,
 };
 
 fn get_input<T>(prompt: &str, mut func: impl FnMut(String) -> Option<T>) -> T {
@@ -18,14 +21,11 @@ pub fn play() {
         loop {
             println!("{}", render(&game));
             let roll = get_input("roll: ", |s| Roll::from_index(s.parse().ok()?));
-            let moves = possible_moves(game, roll);
+            let moves = PossibleMovesIter::new(game, roll).collect_vec();
             println!("moves: {:?}", moves);
             let mov = get_input("move index: ", |s| moves.get(s.parse::<usize>().ok()?));
             match mov {
-                Move::Continue {
-                    game: new_game,
-                    keep_turn,
-                } => {
+                Move::Continue { game: new_game, .. } => {
                     game = new_game.clone();
                 }
                 Move::End { .. } => {

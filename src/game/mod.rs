@@ -1,4 +1,7 @@
-use crate::game::strip::{Delta, DeltaResult, MoveSource, Square, StripIndex, StripState};
+use crate::{
+    game::strip::{Delta, DeltaResult, MoveSource, Square, StripIndex, StripState},
+    successor::{Succ, SuccIter},
+};
 
 pub mod strip;
 
@@ -8,6 +11,35 @@ pub const GOAL_SCORE: u8 = 7;
 pub struct GameState {
     pub prot: TeamState,
     pub opp: TeamState,
+}
+impl From<GameState> for u64 {
+    fn from(state: GameState) -> u64 {
+        let prot_strip = state.prot.strip.0 as u64;
+        let prot_score = state.prot.score as u64;
+        let opp_strip = state.opp.strip.0 as u64;
+        let opp_score = state.opp.score as u64;
+
+        (prot_strip << 32) | (prot_score << 24) | (opp_strip << 8) | opp_score
+    }
+}
+impl From<u64> for GameState {
+    fn from(value: u64) -> GameState {
+        let prot_strip = ((value >> 32) & 0xFFFF) as u16;
+        let prot_score = ((value >> 24) & 0xFF) as u8;
+        let opp_strip = ((value >> 8) & 0xFFFF) as u16;
+        let opp_score = (value & 0xFF) as u8;
+
+        GameState {
+            prot: TeamState {
+                strip: StripState(prot_strip),
+                score: prot_score,
+            },
+            opp: TeamState {
+                strip: StripState(opp_strip),
+                score: opp_score,
+            },
+        }
+    }
 }
 
 impl GameState {
@@ -127,7 +159,7 @@ pub enum Player {
     Opp,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Move {
     Continue { game: GameState, keep_turn: bool },
     End,
@@ -148,9 +180,6 @@ impl Roll {
             Roll::Delta(Delta::new(4).unwrap()),
         ]
     }
-    pub fn iter_all() -> impl Iterator<Item = Roll> {
-        Self::vals().into_iter()
-    }
 
     pub fn from_index(index: usize) -> Option<Self> {
         Self::vals().get(index).cloned()
@@ -158,33 +187,98 @@ impl Roll {
 
     pub fn weight(&self) -> f64 {
         match self {
-            Roll::Zero => 1.0,
-            Roll::Delta(delta) if delta.get() == 1 => 4.0,
-            Roll::Delta(delta) if delta.get() == 2 => 6.0,
-            Roll::Delta(delta) if delta.get() == 3 => 4.0,
-            Roll::Delta(delta) if delta.get() == 4 => 1.0,
+            Roll::Zero => 1.0 / 16.0,
+            Roll::Delta(delta) if delta.get() == 1 => 4.0 / 16.0,
+            Roll::Delta(delta) if delta.get() == 2 => 6.0 / 16.0,
+            Roll::Delta(delta) if delta.get() == 3 => 4.0 / 16.0,
+            Roll::Delta(delta) if delta.get() == 4 => 1.0 / 16.0,
             _ => unreachable!(),
         }
     }
 }
 
-pub fn possible_moves(game: GameState, roll: Roll) -> Vec<Move> {
-    let mut possible_moves: Vec<_> = match roll {
-        Roll::Zero => vec![Move::Continue {
-            game: game.clone(),
-            keep_turn: false,
-        }],
-        Roll::Delta(delta) => MoveSource::iter_all()
-            .filter_map(|source| game.move_piece(source, delta))
-            .collect(),
-    };
-
-    if possible_moves.is_empty() {
-        // skip turn
-        possible_moves = vec![Move::Continue {
-            game: game.clone(),
-            keep_turn: false,
-        }];
+impl Succ for Roll {
+    fn first() -> Self {
+        Self::Zero
     }
-    possible_moves
+    fn succ(&self) -> Option<Self> {
+        Some(match self {
+            Self::Zero => Self::Delta(Delta::first()),
+            Self::Delta(d) => Self::Delta(d.succ()?),
+        })
+    }
+}
+#[derive(Debug, Clone)]
+pub struct PossibleMovesIter {
+    game: GameState,
+    roll: PossibleMovesRoll,
+}
+#[derive(Debug, Clone)]
+pub enum PossibleMovesRoll {
+    Zero(bool),
+    Delta {
+        source_iter: SuccIter<MoveSource>,
+        delta: Delta,
+        provided_one_move: bool,
+    },
+}
+
+impl PossibleMovesIter {
+    pub fn new(game: GameState, roll: Roll) -> Self {
+        Self {
+            game,
+            roll: match roll {
+                Roll::Zero => PossibleMovesRoll::Zero(false),
+                Roll::Delta(delta) => PossibleMovesRoll::Delta {
+                    source_iter: MoveSource::succ_iter(),
+                    provided_one_move: false,
+                    delta,
+                },
+            },
+        }
+    }
+}
+
+impl Iterator for PossibleMovesIter {
+    type Item = Move;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.roll {
+            PossibleMovesRoll::Zero(done) => {
+                if *done {
+                    None
+                } else {
+                    *done = true;
+                    Some(Move::Continue {
+                        game: self.game.clone(),
+                        keep_turn: false,
+                    })
+                }
+            }
+            PossibleMovesRoll::Delta {
+                source_iter,
+                delta,
+                provided_one_move,
+            } => {
+                let mov = source_iter.find_map(|source| self.game.move_piece(source, *delta));
+                match mov {
+                    Some(mov) => {
+                        *provided_one_move = true;
+                        Some(mov)
+                    }
+                    None => {
+                        if *provided_one_move {
+                            None
+                        } else {
+                            *provided_one_move = true;
+                            Some(Move::Continue {
+                                game: self.game.clone(),
+                                keep_turn: false,
+                            })
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

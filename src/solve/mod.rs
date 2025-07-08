@@ -1,60 +1,63 @@
-use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::{
-    game::{possible_moves, GameState, Move, Roll},
-    solve::table::Table,
+    game::{GameState, GOAL_SCORE},
+    save,
+    solve::{mapping::get_mappings, table::Table, table_gpu::TableGpu},
 };
 
 pub mod expr;
+pub mod mapping;
 mod table;
 pub mod table_gpu;
 
-pub fn solve() -> (HashMap<GameState, u32>, Vec<GameState>, Table) {
-    println!("creating state mappings...");
+pub fn time_it<F, R>(label: &str, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let start = Instant::now();
+    let result = f();
+    let elapsed = start.elapsed();
+    println!("{label} took {:.3?}", elapsed);
+    result
+}
+
+pub fn solve() {
     let (state_indices, states) = get_mappings();
     println!("number of states: {}", states.len());
 
     println!("creating table...");
     let mut table = Table::new(&state_indices, &states);
+    println!("created table");
 
-    let epsilon = 1e-6;
-    let mut delta = f64::INFINITY;
-    while delta.abs() >= epsilon {
-        delta = table.converge();
-    }
+    let mut last_save = Instant::now();
 
-    (state_indices, states, table)
-}
+    const NUM_CONVERGE: usize = 1;
 
-pub fn get_mappings() -> (HashMap<GameState, u32>, Vec<GameState>) {
-    let mut state_indices = HashMap::new();
-    let mut states = Vec::new();
-    let mut state_queue = vec![GameState::new()];
+    const SAVE_INTERVAL: Duration = Duration::from_secs(3 * 60);
 
-    while let Some(game) = state_queue.pop() {
-        get_mappings_rec(game, &mut state_queue, &mut state_indices, &mut states);
-    }
-    (state_indices, states)
-}
-fn get_mappings_rec(
-    game: GameState,
-    state_queue: &mut Vec<GameState>,
-    state_indices: &mut HashMap<GameState, u32>,
-    states: &mut Vec<GameState>,
-) {
-    if state_indices.contains_key(&game) {
-        return;
-    } else {
-        let index = states.len();
-        states.push(game);
-        state_indices.insert(game, index.try_into().expect("too many game states"));
-        if states.len() % 1_000_000 == 0 {
-            println!("created {} mappings", states.len());
+    let mut converge_count = 0;
+    loop {
+        time_it(&format!("converge {NUM_CONVERGE} times"), || {
+            table.converge();
+        });
+        converge_count += NUM_CONVERGE;
+        println!("converged {converge_count} times");
+        table.stats();
+
+        if last_save.elapsed() > SAVE_INTERVAL {
+            last_save = Instant::now();
+            save_vals(&table, converge_count);
         }
     }
-    for mov in Roll::iter_all().flat_map(|roll| possible_moves(game, roll)) {
-        if let Move::Continue { game, keep_turn } = mov {
-            state_queue.push(if keep_turn { game } else { game.flipped() });
-        }
-    }
+}
+
+pub fn save_vals(table: &Table, converge_count: usize) {
+    println!("saving vals...");
+    save::write(
+        &format!("./data/vals_{}_{}.bin", GOAL_SCORE, converge_count),
+        table.vals(),
+    );
 }

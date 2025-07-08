@@ -1,4 +1,6 @@
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use itertools::Itertools;
+use rayon::prelude::*;
+use rustc_hash::FxHashMap as HashMap;
 /// To serve as an introduction to the wgpu api, we will implement a simple
 /// compute shader which takes a list of numbers on the CPU and doubles them on the GPU.
 ///
@@ -11,244 +13,419 @@ use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 /// floating point multiplication is a very simple operation so the transfer/submission overhead
 /// is quite a lot higher than the actual computation. This is normal and shows that the GPU
 /// needs a lot higher work/transfer ratio to come out ahead.
-use std::{num::NonZeroU64, str::FromStr, time::Instant};
+use std::num::NonZeroU64;
 use wgpu::util::DeviceExt;
 
-pub fn test() {
-    // Parse all arguments as floats. We need to skip argument 0, which is the name of the program.
-    let arguments: Vec<f32> = (0..(u32::MAX / 4)).map(|x| x as f32).collect();
+use crate::{game::GameState, solve::expr::get_exprs};
 
-    println!("Parsed {} arguments", arguments.len());
+const VALS_DIVIDER: usize = 4;
+pub struct TableGpu {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
 
-    // wgpu uses `log` for all of our logging, so we initialize a logger with the `env_logger` crate.
-    //
-    // To change the log level, set the `RUST_LOG` environment variable. See the `env_logger`
-    // documentation for more information.
+    pub vals: Vec<f32>,
+    pub old_vals: Vec<f32>,
 
-    // We first initialize an wgpu `Instance`, which contains any "global" state wgpu needs.
-    //
-    // This is what loads the vulkan/dx12/metal/opengl libraries.
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    old_val_buffer: wgpu::Buffer,
+    val_buffer: wgpu::Buffer,
+    val_buffer_size: u64,
+    param_buffer: wgpu::Buffer,
+    download_val_buffer: wgpu::Buffer,
+    download_old_val_buffer: wgpu::Buffer,
+    expr_parts_1_buffer: wgpu::Buffer,
+    expr_parts_2_buffer: wgpu::Buffer,
+    expr_starts_buffer: wgpu::Buffer,
 
-    // We then create an `Adapter` which represents a physical gpu in the system. It allows
-    // us to query information about it and create a `Device` from it.
-    //
-    // This function is asynchronous in WebGPU, so request_adapter returns a future. On native/webgl
-    // the future resolves immediately, so we can block on it without harm.
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .expect("Failed to create adapter");
+    pipeline: wgpu::ComputePipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
 
-    // Print out some basic information about the adapter.
-    println!("Running on Adapter: {:#?}", adapter.get_info());
+    workgroups_x: u32,
+    workgroups_y: u32,
+}
 
-    // Check to see if the adapter supports compute shaders. While WebGPU guarantees support for
-    // compute shaders, wgpu supports a wider range of devices through the use of "downlevel" devices.
-    let downlevel_capabilities = adapter.get_downlevel_capabilities();
-    if !downlevel_capabilities
-        .flags
-        .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
-    {
-        panic!("Adapter does not support compute shaders");
+impl TableGpu {
+    pub fn new(state_indices: &HashMap<GameState, u32>, states: &[GameState]) -> Self {
+        let (expr_parts, expr_starts) = get_exprs(state_indices, states);
+        println!("number of expr parts: {}", expr_parts.len());
+
+        // We first initialize an wgpu `Instance`, which contains any "global" state wgpu needs.
+        //
+        // This is what loads the vulkan/dx12/metal/opengl libraries.
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+
+        // We then create an `Adapter` which represents a physical gpu in the system. It allows
+        // us to query information about it and create a `Device` from it.
+        //
+        // This function is asynchronous in WebGPU, so request_adapter returns a future. On native/webgl
+        // the future resolves immediately, so we can block on it without harm.
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .expect("Failed to create adapter");
+
+        // Print out some basic information about the adapter.
+
+        // Check to see if the adapter supports compute shaders. While WebGPU guarantees support for
+        // compute shaders, wgpu supports a wider range of devices through the use of "downlevel" devices.
+        let downlevel_capabilities = adapter.get_downlevel_capabilities();
+        if !downlevel_capabilities
+            .flags
+            .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
+        {
+            panic!("Adapter does not support compute shaders");
+        }
+
+        // We then create a `Device` and a `Queue` from the `Adapter`.
+        //
+        // The `Device` is used to create and manage GPU resources.
+        // The `Queue` is a queue used to submit work for the GPU to process.
+
+        let mut required_limits = wgpu::Limits::downlevel_defaults();
+        required_limits.max_buffer_size = 8589934592;
+        required_limits.max_storage_buffers_per_shader_stage = 5;
+        let required_features = wgpu::Features::empty();
+        required_limits.max_storage_buffer_binding_size = u32::MAX;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: None,
+            required_features,
+            required_limits,
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
+            trace: wgpu::Trace::Off,
+        }))
+        .expect("Failed to create device");
+
+        // Create a shader module from our shader code. This will parse and validate the shader.
+        //
+        // `include_wgsl` is a macro provided by wgpu like `include_str` which constructs a ShaderModuleDescriptor.
+        // If you want to load shaders differently, you can construct the ShaderModuleDescriptor manually.
+        let module = device.create_shader_module(wgpu::include_wgsl!("expr.wgsl"));
+
+        let states_section_len = states.len() / VALS_DIVIDER;
+        let val_buffer_size = (states_section_len * std::mem::size_of::<f32>()) as u64;
+
+        let total_invocations = states_section_len;
+        let workgroup_size = 256;
+        let total_workgroups = (total_invocations + workgroup_size - 1) / workgroup_size;
+
+        let max_x = 65535;
+        let workgroups_x = max_x.min(total_workgroups as u32);
+        let workgroups_y = ((total_workgroups as f32) / workgroups_x as f32).ceil() as u32;
+        let width = workgroups_x as usize * workgroup_size;
+
+        let param_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Params Buffer"),
+            contents: bytemuck::bytes_of(&Params {
+                width: width as u32,
+            }),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let val_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Val Buffer"),
+            size: val_buffer_size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let old_val_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Old Val Buffer"),
+            size: val_buffer_size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let expr_parts_num = expr_parts.iter().cloned().map(u32::from).collect_vec();
+        let expr_parts_cutoff = expr_parts_num.len() / 2;
+        let expr_parts_1_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Expr Parts Buffer 1"),
+            contents: bytemuck::cast_slice(&expr_parts_num[..expr_parts_cutoff]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+        let expr_parts_2_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Expr Parts Buffer 2"),
+            contents: bytemuck::cast_slice(&expr_parts_num[expr_parts_cutoff..]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let expr_starts_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Expr Starts Buffer"),
+            contents: bytemuck::cast_slice(&expr_starts),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        // Copy the final result to a readable buffer
+        let download_val_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Download Val Buffer"),
+            size: val_buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let download_old_val_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Download Old Val Buffer"),
+            size: val_buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(NonZeroU64::new(4).unwrap()),
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Eval Expr Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &module,
+            entry_point: Some("evalExpr"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        let vals = vec![0.0; states.len()];
+        let old_vals = vec![0.0; states.len()];
+
+        Self {
+            device,
+            queue,
+            bind_group_layout,
+            val_buffer,
+            old_val_buffer,
+            param_buffer,
+            download_val_buffer,
+            download_old_val_buffer,
+            pipeline,
+            workgroups_x,
+            workgroups_y,
+            val_buffer_size,
+            expr_parts_1_buffer,
+            expr_parts_2_buffer,
+            expr_starts_buffer,
+            vals,
+            old_vals,
+        }
     }
 
-    // We then create a `Device` and a `Queue` from the `Adapter`.
-    //
-    // The `Device` is used to create and manage GPU resources.
-    // The `Queue` is a queue used to submit work for the GPU to process.
+    pub fn converge(&mut self, n: usize) {
+        std::mem::swap(&mut self.vals, &mut self.old_vals);
 
-    let mut required_limits = wgpu::Limits::downlevel_defaults();
-    required_limits.max_buffer_size = 8589934592;
-    required_limits.max_storage_buffer_binding_size = u32::MAX;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: None,
-        required_features: wgpu::Features::empty(),
-        required_limits,
-        memory_hints: wgpu::MemoryHints::MemoryUsage,
-        trace: wgpu::Trace::Off,
-    }))
-    .expect("Failed to create device");
+        let Self {
+            device,
+            queue,
 
-    // Create a shader module from our shader code. This will parse and validate the shader.
-    //
-    // `include_wgsl` is a macro provided by wgpu like `include_str` which constructs a ShaderModuleDescriptor.
-    // If you want to load shaders differently, you can construct the ShaderModuleDescriptor manually.
-    let module = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+            val_buffer,
+            old_val_buffer,
+            param_buffer,
 
-    // Create a buffer with the data we want to process on the GPU.
-    //
-    // `create_buffer_init` is a utility provided by `wgpu::util::DeviceExt` which simplifies creating
-    // a buffer with some initial data.
-    //
-    // We use the `bytemuck` crate to cast the slice of f32 to a &[u8] to be uploaded to the GPU.
-    let input_data_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None,
-        contents: bytemuck::cast_slice(&arguments),
-        usage: wgpu::BufferUsages::STORAGE,
-    });
+            pipeline,
+            bind_group_layout,
+            workgroups_x,
+            workgroups_y,
 
-    // Now we create a buffer to store the output data.
-    let output_data_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: input_data_buffer.size(),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
+            expr_parts_1_buffer,
+            expr_parts_2_buffer,
+            expr_starts_buffer,
+            ..
+        } = self;
+        // Ping-pong buffers
 
-    // Finally we create a buffer which can be read by the CPU. This buffer is how we will read
-    // the data. We need to use a separate buffer because we need to have a usage of `MAP_READ`,
-    // and that usage can only be used with `COPY_DST`.
-    let download_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: input_data_buffer.size(),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+        for _ in 0..n {
+            std::mem::swap(old_val_buffer, val_buffer);
 
-    // A bind group layout describes the types of resources that a bind group can contain. Think
-    // of this like a C-style header declaration, ensuring both the pipeline and bind group agree
-    // on the types of resources.
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: None,
-        entries: &[
-            // Input buffer
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    // This is the size of a single element in the buffer.
-                    min_binding_size: Some(NonZeroU64::new(4).unwrap()),
-                    has_dynamic_offset: false,
-                },
-                count: None,
-            },
-            // Output buffer
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    // This is the size of a single element in the buffer.
-                    min_binding_size: Some(NonZeroU64::new(4).unwrap()),
-                    has_dynamic_offset: false,
-                },
-                count: None,
-            },
-        ],
-    });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: param_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: old_val_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: val_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: expr_starts_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: expr_parts_1_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: expr_parts_2_buffer.as_entire_binding(),
+                    },
+                ],
+            });
 
-    // The bind group contains the actual resources to bind to the pipeline.
-    //
-    // Even when the buffers are individually dropped, wgpu will keep the bind group and buffers
-    // alive until the bind group itself is dropped.
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: input_data_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: output_data_buffer.as_entire_binding(),
-            },
-        ],
-    });
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Compute Encoder"),
+            });
 
-    // The pipeline layout describes the bind groups that a pipeline expects
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None,
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
-    });
+            {
+                let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Compute Pass"),
+                    timestamp_writes: None,
+                });
 
-    // The pipeline is the ready-to-go program state for the GPU. It contains the shader modules,
-    // the interfaces (bind group layouts) and the shader entry point.
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: None,
-        layout: Some(&pipeline_layout),
-        module: &module,
-        entry_point: Some("doubleMe"),
-        compilation_options: wgpu::PipelineCompilationOptions::default(),
-        cache: None,
-    });
+                compute_pass.set_pipeline(&pipeline);
+                compute_pass.set_bind_group(0, &bind_group, &[]);
+                compute_pass.dispatch_workgroups(*workgroups_x, *workgroups_y, 1);
+            }
 
-    // The command encoder allows us to record commands that we will later submit to the GPU.
-    let mut encoder =
-        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            queue.submit(Some(encoder.finish()));
+            device.poll(wgpu::PollType::Wait).unwrap();
+        }
+    }
 
-    // A compute pass is a single series of compute operations. While we are recording a compute
-    // pass, we cannot record to the encoder.
-    let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-        label: None,
-        timestamp_writes: None,
-    });
+    pub fn stats(&mut self) {
+        // Record both copies
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Final Copy Encoder"),
+            });
+        encoder.copy_buffer_to_buffer(
+            &self.old_val_buffer,
+            0,
+            &self.download_old_val_buffer,
+            0,
+            self.val_buffer_size,
+        );
+        encoder.copy_buffer_to_buffer(
+            &self.val_buffer,
+            0,
+            &self.download_val_buffer,
+            0,
+            self.val_buffer_size,
+        );
+        self.queue.submit(Some(encoder.finish()));
+        self.device.poll(wgpu::PollType::Wait).unwrap();
 
-    // Set the pipeline that we want to use
-    compute_pass.set_pipeline(&pipeline);
-    // Set the bind group that we want to use
-    compute_pass.set_bind_group(0, &bind_group, &[]);
+        // Map both buffers
+        let slice_input = self.download_old_val_buffer.slice(..);
+        let slice_output = self.download_val_buffer.slice(..);
+        slice_input.map_async(wgpu::MapMode::Read, |_| {});
+        slice_output.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::PollType::Wait).unwrap();
 
-    let total_invocations = arguments.len();
-    let workgroup_size = 256;
-    let total_workgroups = (total_invocations + workgroup_size - 1) / workgroup_size;
+        // Read both into vectors
+        let data_input = slice_input.get_mapped_range();
+        let data_output = slice_output.get_mapped_range();
 
-    let max_x = 65535;
-    let workgroups_x = max_x.min(total_workgroups as u32);
-    let workgroups_y = ((total_workgroups as f64) / workgroups_x as f64).ceil() as u32;
+        self.old_vals = bytemuck::cast_slice(&data_input).to_vec();
+        self.vals = bytemuck::cast_slice(&data_output).to_vec();
 
-    compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        drop(data_input);
+        drop(data_output);
+        self.download_old_val_buffer.unmap();
+        self.download_val_buffer.unmap();
 
-    // Now we drop the compute pass, giving us access to the encoder again.
-    drop(compute_pass);
+        let total_delta: f32 = self
+            .vals
+            .par_iter()
+            .zip(self.old_vals.par_iter())
+            .map(|(x, y)| (x - y).abs())
+            .sum();
 
-    // We add a copy operation to the encoder. This will copy the data from the output buffer on the
-    // GPU to the download buffer on the CPU.
-    encoder.copy_buffer_to_buffer(
-        &output_data_buffer,
-        0,
-        &download_buffer,
-        0,
-        output_data_buffer.size(),
-    );
+        let max_delta: f32 = self
+            .vals
+            .par_iter()
+            .zip(self.old_vals.par_iter())
+            .map(|(x, y)| (x - y).abs())
+            .reduce(|| f32::NEG_INFINITY, f32::max);
 
-    // We finish the encoder, giving us a fully recorded command buffer.
-    let command_buffer = encoder.finish();
+        println!(
+            "total delta: {}, average delta: {}, max delta: {}",
+            total_delta,
+            total_delta / self.vals.len() as f32,
+            max_delta
+        );
+    }
 
-    // At this point nothing has actually been executed on the gpu. We have recorded a series of
-    // commands that we want to execute, but they haven't been sent to the gpu yet.
-    //
-    // Submitting to the queue sends the command buffer to the gpu. The gpu will then execute the
-    // commands in the command buffer in order.
-    println!("sending command buffer to gpu");
-    let start = Instant::now();
-    queue.submit([command_buffer]);
-
-    // We now map the download buffer so we can read it. Mapping tells wgpu that we want to read/write
-    // to the buffer directly by the CPU and it should not permit any more GPU operations on the buffer.
-    //
-    // Mapping requires that the GPU be finished using the buffer before it resolves, so mapping has a callback
-    // to tell you when the mapping is complete.
-    let buffer_slice = download_buffer.slice(..);
-    buffer_slice.map_async(wgpu::MapMode::Read, |_| {
-        // In this case we know exactly when the mapping will be finished,
-        // so we don't need to do anything in the callback.
-    });
-
-    // Wait for the GPU to finish working on the submitted work. This doesn't work on WebGPU, so we would need
-    // to rely on the callback to know when the buffer is mapped.
-    device.poll(wgpu::PollType::Wait).unwrap();
-    println!("done polling");
-    let duration = start.elapsed();
-    println!("Time elapsed: {:.2?}", duration);
-
-    // We can now read the data from the buffer.
-    let data = buffer_slice.get_mapped_range();
-    // Convert the data back to a slice of f32.
-    let result: &[f32] = bytemuck::cast_slice(&data);
-
-    // Print out the result.
-    // println!("Result: {:?}", result);
+    pub fn vals(&self) -> &[f32] {
+        &self.vals
+    }
 }
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct Params {
+    width: u32,
+}
+
+unsafe impl bytemuck::Pod for Params {}
+unsafe impl bytemuck::Zeroable for Params {}
