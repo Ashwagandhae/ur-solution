@@ -1,9 +1,6 @@
 use std::io;
 
-use crate::{
-    render::render,
-    solve::{mapping::get_mappings, solve, table_gpu::TableGpu},
-};
+use crate::solve::solve;
 
 mod game;
 mod play;

@@ -1,5 +1,6 @@
 use crate::{
     game::strip::{Delta, DeltaResult, MoveSource, Square, StripIndex, StripState},
+    solve::perma::PermaKey,
     successor::{Succ, SuccIter},
 };
 
@@ -12,35 +13,6 @@ pub struct GameState {
     pub prot: TeamState,
     pub opp: TeamState,
 }
-impl From<GameState> for u64 {
-    fn from(state: GameState) -> u64 {
-        let prot_strip = state.prot.strip.0 as u64;
-        let prot_score = state.prot.score as u64;
-        let opp_strip = state.opp.strip.0 as u64;
-        let opp_score = state.opp.score as u64;
-
-        (prot_strip << 32) | (prot_score << 24) | (opp_strip << 8) | opp_score
-    }
-}
-impl From<u64> for GameState {
-    fn from(value: u64) -> GameState {
-        let prot_strip = ((value >> 32) & 0xFFFF) as u16;
-        let prot_score = ((value >> 24) & 0xFF) as u8;
-        let opp_strip = ((value >> 8) & 0xFFFF) as u16;
-        let opp_score = (value & 0xFF) as u8;
-
-        GameState {
-            prot: TeamState {
-                strip: StripState(prot_strip),
-                score: prot_score,
-            },
-            opp: TeamState {
-                strip: StripState(opp_strip),
-                score: opp_score,
-            },
-        }
-    }
-}
 
 impl GameState {
     pub fn new() -> Self {
@@ -48,6 +20,114 @@ impl GameState {
             prot: TeamState::new(),
             opp: TeamState::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Copy)]
+// [3:score1][3:score2][4:start1][2:end1][4:start2][2:end2][13:shared]
+// 30..=28   27..=25   24..=21   20..=19 18..=15   14..=13    12..=0
+pub struct GameStateSmall(u32);
+
+impl PartialOrd for GameStateSmall {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(&other))
+    }
+}
+
+impl Ord for GameStateSmall {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        PermaKey::new(GameState::from(*self))
+            .cmp(&PermaKey::new(GameState::from(*other)))
+            .then_with(|| self.0.cmp(&other.0))
+            .reverse()
+    }
+}
+impl From<GameState> for GameStateSmall {
+    fn from(value: GameState) -> Self {
+        let mut res = 0;
+        res |= ((value.prot.score & 0b0000_0111) as u32) << 28;
+        res |= ((value.opp.score & 0b0000_0111) as u32) << 25;
+
+        res |= (value.prot.strip.start_bits() as u32) << 21;
+        res |= (value.prot.strip.end_bits() as u32) << 19;
+
+        res |= (value.opp.strip.start_bits() as u32) << 15;
+        res |= (value.opp.strip.end_bits() as u32) << 13;
+
+        let shared = StripIndex::succ_iter()
+            .skip(4)
+            .take(8)
+            .fold(0u32, |acc, i| {
+                acc * 3
+                    + match (value.prot.strip.get(i), value.opp.strip.get(i)) {
+                        (false, false) => 0,
+                        (true, false) => 1,
+                        (false, true) => 2,
+                        _ => panic!("prot and opp overlap"),
+                    }
+            });
+        res |= 0b0111_1111_1111_1111 & shared;
+        Self(res)
+    }
+}
+
+impl From<GameStateSmall> for GameState {
+    fn from(small: GameStateSmall) -> Self {
+        let bits = small.0;
+
+        let score1 = ((bits >> 28) & 0b111) as u8;
+        let score2 = ((bits >> 25) & 0b111) as u8;
+
+        let start1 = ((bits >> 21) & 0b1111) as u8;
+        let end1 = ((bits >> 19) & 0b11) as u8;
+
+        let start2 = ((bits >> 15) & 0b1111) as u8;
+        let end2 = ((bits >> 13) & 0b11) as u8;
+
+        let shared_encoded = bits & 0b01_1111_1111_1111;
+
+        let mut prot_strip = StripState::from_start_and_end(start1, end1);
+        let mut opp_strip = StripState::from_start_and_end(start2, end2);
+
+        let mut shared = shared_encoded;
+        for i in (4..12).rev() {
+            let digit = shared % 3;
+            shared /= 3;
+
+            match digit {
+                0 => {}
+                1 => {
+                    prot_strip.set(StripIndex::new(i).unwrap(), true);
+                }
+                2 => {
+                    opp_strip.set(StripIndex::new(i).unwrap(), true);
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        GameState {
+            prot: TeamState {
+                score: score1,
+                strip: prot_strip,
+            },
+            opp: TeamState {
+                score: score2,
+                strip: opp_strip,
+            },
+        }
+    }
+}
+
+impl From<u32> for GameStateSmall {
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<GameStateSmall> for u32 {
+    fn from(value: GameStateSmall) -> Self {
+        value.0
     }
 }
 

@@ -1,3 +1,4 @@
+use core::f32;
 use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap as HashMap;
@@ -5,11 +6,13 @@ use rustc_hash::FxHashMap as HashMap;
 use crate::{
     game::{GameState, GOAL_SCORE},
     save,
-    solve::{mapping::get_mappings, table::Table, table_gpu::TableGpu},
+    solve::{order::get_order, table::Table, table_gpu::TableGpu},
 };
 
+mod converge;
 pub mod expr;
-pub mod mapping;
+pub mod order;
+pub mod perma;
 mod table;
 pub mod table_gpu;
 
@@ -25,33 +28,9 @@ where
 }
 
 pub fn solve() {
-    let (state_indices, states) = get_mappings();
+    let states = get_order();
     println!("number of states: {}", states.len());
-
-    println!("creating table...");
-    let mut table = Table::new(&state_indices, &states);
-    println!("created table");
-
-    let mut last_save = Instant::now();
-
-    const NUM_CONVERGE: usize = 1;
-
-    const SAVE_INTERVAL: Duration = Duration::from_secs(3 * 60);
-
-    let mut converge_count = 0;
-    loop {
-        time_it(&format!("converge {NUM_CONVERGE} times"), || {
-            table.converge();
-        });
-        converge_count += NUM_CONVERGE;
-        println!("converged {converge_count} times");
-        table.stats();
-
-        if last_save.elapsed() > SAVE_INTERVAL {
-            last_save = Instant::now();
-            save_vals(&table, converge_count);
-        }
-    }
+    let mut vals = vec![f32::NAN; states.len()];
 }
 
 pub fn save_vals(table: &Table, converge_count: usize) {

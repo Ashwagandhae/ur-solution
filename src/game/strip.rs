@@ -1,6 +1,6 @@
 use crate::successor::Succ;
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StripState(pub u16);
 
 impl StripState {
@@ -20,6 +20,20 @@ impl StripState {
 
     pub fn count_pieces(&self) -> u8 {
         StripIndex::succ_iter().filter(|&i| self.get(i)).count() as u8
+    }
+
+    pub fn from_start_and_end(start: u8, end: u8) -> Self {
+        let start_bits = (start & 0b1111) as u16; // bits 0..=3
+        let end_bits = ((end & 0b11) as u16) << 12; // bits 12..=13
+        Self(start_bits | end_bits)
+    }
+
+    pub fn start_bits(&self) -> u8 {
+        ((self.0) & 0b0000_0000_0000_1111) as u8
+    }
+
+    pub fn end_bits(&self) -> u8 {
+        ((self.0 >> 12) & 0b11) as u8
     }
 }
 
@@ -50,8 +64,8 @@ impl Succ for Delta {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct StripIndex(u8);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StripIndex(pub u8);
 
 impl StripIndex {
     pub fn new(i: u8) -> Option<StripIndex> {
