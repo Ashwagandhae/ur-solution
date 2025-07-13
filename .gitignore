@@ -1,4 +1,4 @@
 /target
-/data
+/data/*
 .DS_Store
 profile.json.gz
