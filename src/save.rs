@@ -4,7 +4,7 @@ use std::{
 };
 
 pub fn read<D: bincode::Decode<()>>(path: &str) -> Option<D> {
-    println!("trying to read {}...", path);
+    println!("trying to read {path}...");
     let file = match File::open(path) {
         Ok(file) => file,
         Err(err) => match err.kind() {
@@ -14,7 +14,7 @@ pub fn read<D: bincode::Decode<()>>(path: &str) -> Option<D> {
             _ => panic!("failed to open file"),
         },
     };
-    println!("reading {}...", path);
+    println!("reading {path}...");
     let mut file = BufReader::new(file);
     let deserialized: D =
         bincode::decode_from_std_read(&mut file, bincode::config::standard()).unwrap();

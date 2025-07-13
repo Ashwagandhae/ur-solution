@@ -1,6 +1,5 @@
 use itertools::Itertools;
 use rayon::prelude::*;
-use rustc_hash::FxHashMap as HashMap;
 /// To serve as an introduction to the wgpu api, we will implement a simple
 /// compute shader which takes a list of numbers on the CPU and doubles them on the GPU.
 ///
@@ -207,7 +206,7 @@ impl Converger {
 
         let total_invocations = in_vals_len;
         let workgroup_size = 256;
-        let total_workgroups = (total_invocations + workgroup_size - 1) / workgroup_size;
+        let total_workgroups = total_invocations.div_ceil(workgroup_size);
 
         let max_x = 65535;
         let workgroups_x = max_x.min(total_workgroups as u32);
@@ -230,7 +229,7 @@ impl Converger {
 
         let dep_vals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Dep Vals Buffer"),
-            contents: bytemuck::cast_slice(&dep_vals),
+            contents: bytemuck::cast_slice(dep_vals),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
@@ -257,7 +256,7 @@ impl Converger {
 
         let expr_starts_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Expr Starts Buffer"),
-            contents: bytemuck::cast_slice(&expr_starts),
+            contents: bytemuck::cast_slice(expr_starts),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
@@ -322,7 +321,7 @@ impl Converger {
 
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
-                layout: &bind_group_layout,
+                layout: bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -361,7 +360,7 @@ impl Converger {
                     timestamp_writes: None,
                 });
 
-                compute_pass.set_pipeline(&pipeline);
+                compute_pass.set_pipeline(pipeline);
                 compute_pass.set_bind_group(0, &bind_group, &[]);
                 compute_pass.dispatch_workgroups(*workgroups_x, *workgroups_y, 1);
             }

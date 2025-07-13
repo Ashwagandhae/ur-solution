@@ -1,15 +1,10 @@
-use core::f32;
-use std::{
-    thread::sleep,
-    time::{Duration, Instant},
-};
+use std::time::Instant;
 
-use rustc_hash::FxHashMap as HashMap;
 
 use crate::{
-    game::{GameState, GameStateSmall, GOAL_SCORE},
+    game::{GameStateSmall, GOAL_SCORE},
     save,
-    solve::{converge::converge, converge_gpu::DeviceHolder, order::get_order, perma::PermaKey},
+    solve::{converge::converge, converge_gpu::DeviceHolder, order::get_order},
 };
 
 mod converge;
@@ -27,7 +22,7 @@ where
     let start = Instant::now();
     let result = f();
     let elapsed = start.elapsed();
-    println!("{label} took {:.3?}", elapsed);
+    println!("{label} took {elapsed:.3?}");
     result
 }
 
@@ -44,11 +39,11 @@ pub fn solve() -> (Vec<GameStateSmall>, Vec<f64>) {
     let mut expr_starts = Vec::new();
 
     for (i, (key, range)) in perma_keys.iter().enumerate() {
-        let lowest_dep = (&perma_keys[..=i])
+        let lowest_dep = perma_keys[..=i]
             .iter()
             .rev()
             .filter(|(other_key, _)| other_key.reachable_in_one_move_from(*key))
-            .last()
+            .next_back()
             .unwrap();
         let dep_start = lowest_dep.1.start;
         println!(
@@ -77,7 +72,7 @@ pub fn solve() -> (Vec<GameStateSmall>, Vec<f64>) {
 pub fn save_vals(vals: &[f64], converge_count: usize) {
     println!("saving vals...");
     save::write(
-        &format!("./data/vals_{}_{}.bin", GOAL_SCORE, converge_count),
+        &format!("./data/vals_{GOAL_SCORE}_{converge_count}.bin"),
         vals,
     );
 }

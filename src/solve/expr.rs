@@ -1,10 +1,7 @@
-use core::f64;
 use itertools::Itertools;
-use rustc_hash::FxHashMap as HashMap;
 
 use crate::{
-    game::{GameState, GameStateSmall, Move, PossibleMovesIter, Roll, GOAL_SCORE},
-    save::read_or_create,
+    game::{GameState, GameStateSmall, Move, PossibleMovesIter, Roll},
     successor::Succ,
 };
 use num_traits::Float;
@@ -123,7 +120,7 @@ pub fn create_exprs(
     expr_parts: &mut Vec<ExprPart>,
     expr_starts: &mut Vec<u32>,
 ) {
-    let parts: Vec<_> = (&states[start..end])
+    let parts: Vec<_> = states[start..end]
         .par_iter()
         .flat_map_iter(|game| {
             Roll::succ_iter().flat_map(|roll| {
@@ -140,7 +137,7 @@ pub fn create_exprs(
                         }
                         Move::Continue { game, keep_turn } => {
                             let game = if keep_turn { game } else { game.flipped() };
-                            let idx: u32 = ((&states[dep_start..end])
+                            let idx: u32 = (states[dep_start..end]
                                 .binary_search(&GameStateSmall::from(game))
                                 .unwrap()
                                 + dep_start)

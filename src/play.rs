@@ -8,7 +8,7 @@ use crate::{
 
 fn get_input<T>(prompt: &str, mut func: impl FnMut(String) -> Option<T>) -> T {
     loop {
-        println!("{}", prompt);
+        println!("{prompt}");
         if let Some(res) = func(input().trim().to_string()) {
             return res;
         }
@@ -22,13 +22,13 @@ pub fn play() {
             println!("{}", render(&game));
             let roll = get_input("roll: ", |s| Roll::from_index(s.parse().ok()?));
             let moves = PossibleMovesIter::new(game, roll).collect_vec();
-            println!("moves: {:?}", moves);
+            println!("moves: {moves:?}");
             let mov = get_input("move index: ", |s| moves.get(s.parse::<usize>().ok()?));
             match mov {
                 Move::Continue { game: new_game, .. } => {
-                    game = new_game.clone();
+                    game = *new_game;
                 }
-                Move::End { .. } => {
+                Move::End => {
                     println!("ended");
                     break;
                 }

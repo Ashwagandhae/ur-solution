@@ -54,8 +54,8 @@ pub fn converge(
             dep_start,
             dep_vals,
             vals,
-            &expr_parts,
-            &expr_starts,
+            expr_parts,
+            expr_starts,
             device_holder,
         );
     } else {
@@ -63,8 +63,8 @@ pub fn converge(
             dep_start,
             dep_vals,
             vals,
-            &expr_parts,
-            &expr_starts,
+            expr_parts,
+            expr_starts,
             THRESHOLD_DELTA_64,
         );
     }
@@ -96,11 +96,11 @@ fn converge_gpu_f32(
         converger.converge(device_holder, 20, in_vals, out_vals);
         let delta = max_delta(in_vals, out_vals);
         if delta <= THRESHOLD_DELTA_32 {
-            println!("final delta {} after {} iters", delta, iters);
+            println!("final delta {delta} after {iters} iters");
             break;
         }
         if iters > MAX_ITERS {
-            panic!("reached max iters: {}", MAX_ITERS);
+            panic!("reached max iters: {MAX_ITERS}");
             break;
         }
     }
@@ -134,11 +134,11 @@ fn converge_gpu_f64(
         converger.converge(device_holder, 20, in_vals, out_vals);
         let delta = max_delta(in_vals, out_vals);
         if delta <= THRESHOLD_DELTA_32 {
-            println!("switching to cpu after {} iters", iters);
+            println!("switching to cpu after {iters} iters");
             break;
         }
         if iters > MAX_ITERS {
-            println!("reached max iters: {}", MAX_ITERS);
+            println!("reached max iters: {MAX_ITERS}");
             break;
         }
     }
@@ -173,21 +173,21 @@ fn converge_cpu<T: Float + Send + Sync + Display>(
         iters += 1;
         step(
             dep_start,
-            &dep_vals,
+            dep_vals,
             in_vals,
             out_vals,
-            &expr_parts,
-            &expr_starts,
+            expr_parts,
+            expr_starts,
         );
 
         let delta = max_delta(in_vals, out_vals);
 
         if delta <= threshold_delta {
-            println!("final delta {} after {} iters", delta, iters);
+            println!("final delta {delta} after {iters} iters");
             break;
         }
         if iters > MAX_ITERS {
-            panic!("reached max iters: {}", MAX_ITERS);
+            panic!("reached max iters: {MAX_ITERS}");
             break;
         }
 
@@ -197,7 +197,7 @@ fn converge_cpu<T: Float + Send + Sync + Display>(
     if !swapped {
         // we know vals doesn't have the most recent values, so we need to update
         let vals = in_vals;
-        vals.copy_from_slice(&out_vals);
+        vals.copy_from_slice(out_vals);
     }
 }
 
@@ -220,7 +220,7 @@ pub fn step<T: Float + Send + Sync>(
         }
     };
     out_vals.par_iter_mut().enumerate().for_each(|(i, val)| {
-        *val = eval_expr(&expr_parts, expr_starts[i] as usize, get_val);
+        *val = eval_expr(expr_parts, expr_starts[i] as usize, get_val);
     });
 }
 

@@ -3,6 +3,12 @@ use crate::successor::Succ;
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StripState(pub u16);
 
+impl Default for StripState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StripState {
     pub fn new() -> Self {
         Self(0)
@@ -42,7 +48,7 @@ pub struct Delta(u8);
 
 impl Delta {
     pub fn new(d: u8) -> Option<Delta> {
-        if d > 4 || d < 1 {
+        if !(1..=4).contains(&d) {
             None
         } else {
             Some(Delta(d))

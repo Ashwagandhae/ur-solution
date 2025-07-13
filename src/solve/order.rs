@@ -15,7 +15,7 @@ use rayon::prelude::*;
 
 pub fn get_order() -> (Vec<GameStateSmall>, Vec<(PermaKey, Range<usize>)>) {
     let mut states = read_or_create(
-        &format!("./data/order_{}.bin", GOAL_SCORE),
+        &format!("./data/order_{GOAL_SCORE}.bin"),
         create_order,
         |states| states.iter().map(|state| (*state).into()).collect(),
         |data: &Vec<u32>| data.iter().cloned().map(GameStateSmall::from).collect(),
@@ -37,12 +37,12 @@ pub fn get_order() -> (Vec<GameStateSmall>, Vec<(PermaKey, Range<usize>)>) {
     );
 
     let is_sorted = states.is_sorted_by(|x, y| x < y);
-    println!("is sorted: {}", is_sorted);
+    println!("is sorted: {is_sorted}");
     if !is_sorted {
         println!("sorting...");
         states.par_sort();
         save::write(
-            &format!("./data/order_{}.bin", GOAL_SCORE),
+            &format!("./data/order_{GOAL_SCORE}.bin"),
             states.iter().map(|state| u32::from(*state)).collect_vec(),
         );
     }
@@ -79,7 +79,7 @@ fn create_order_rec(
     state_queue.extend(
         game_deps(GameState::from(game))
             .map(GameStateSmall::from)
-            .filter(|new_game| !states.contains(&new_game)),
+            .filter(|new_game| !states.contains(new_game)),
     );
 }
 

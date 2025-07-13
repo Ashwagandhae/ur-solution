@@ -16,6 +16,12 @@ pub struct GameState {
     pub opp: TeamState,
 }
 
+impl Default for GameState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GameState {
     pub fn new() -> Self {
         Self {
@@ -32,7 +38,7 @@ pub struct GameStateSmall(u32);
 
 impl PartialOrd for GameStateSmall {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(&other))
+        Some(self.cmp(other))
     }
 }
 
@@ -138,6 +144,12 @@ pub struct TeamState {
     pub score: u8,
 }
 
+impl Default for TeamState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TeamState {
     pub fn new() -> Self {
         Self {
@@ -156,7 +168,7 @@ impl TeamState {
         match source {
             MoveSource::Index(i) => {
                 if self.strip.get(i) {
-                    let mut state = self.clone();
+                    let mut state = *self;
                     state.strip.set(i, false);
                     Some(state)
                 } else {
@@ -167,7 +179,7 @@ impl TeamState {
                 if self.remaining() == 0 {
                     None
                 } else {
-                    Some(self.clone())
+                    Some(*self)
                 }
             }
         }
@@ -190,17 +202,15 @@ impl GameState {
                 (false, false) => None,
                 _ => panic!("prot and opp strips both have piece at {i:?}"),
             }
+        } else if self.prot.strip.get(i) {
+            Some(Player::Prot)
         } else {
-            if self.prot.strip.get(i) {
-                Some(Player::Prot)
-            } else {
-                None
-            }
+            None
         }
     }
 
     pub fn move_piece(&self, source: MoveSource, delta: Delta) -> Option<Move> {
-        let mut game = self.clone();
+        let mut game = *self;
         game.prot = game.prot.remove_move_source(source)?;
         match source.apply_delta(delta) {
             DeltaResult::OutOfBounds => None,
@@ -332,7 +342,7 @@ impl Iterator for PossibleMovesIter {
                 } else {
                     *done = true;
                     Some(Move::Continue {
-                        game: self.game.clone(),
+                        game: self.game,
                         keep_turn: false,
                     })
                 }
@@ -354,7 +364,7 @@ impl Iterator for PossibleMovesIter {
                         } else {
                             *provided_one_move = true;
                             Some(Move::Continue {
-                                game: self.game.clone(),
+                                game: self.game,
                                 keep_turn: false,
                             })
                         }

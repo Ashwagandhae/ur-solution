@@ -1,4 +1,3 @@
-use rayon::iter::ParallelIterator;
 
 pub trait Succ {
     fn succ(&self) -> Option<Self>
