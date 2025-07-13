@@ -1082,6 +1082,7 @@ dependencies = [
  "bytemuck",
  "env_logger",
  "itertools",
+ "num-traits",
  "pollster",
  "rand",
  "rayon",

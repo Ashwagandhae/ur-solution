@@ -1,3 +1,5 @@
+use num_traits::Float;
+
 use crate::{
     game::strip::{Delta, DeltaResult, MoveSource, Square, StripIndex, StripState},
     solve::perma::PermaKey,
@@ -6,7 +8,7 @@ use crate::{
 
 pub mod strip;
 
-pub const GOAL_SCORE: u8 = 7;
+pub const GOAL_SCORE: u8 = 6;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Copy)]
 pub struct GameState {
@@ -264,15 +266,16 @@ impl Roll {
         Self::vals().get(index).cloned()
     }
 
-    pub fn weight(&self) -> f32 {
-        match self {
+    pub fn weight<T: Float>(&self) -> T {
+        T::from(match self {
             Roll::Zero => 1.0 / 16.0,
             Roll::Delta(delta) if delta.get() == 1 => 4.0 / 16.0,
             Roll::Delta(delta) if delta.get() == 2 => 6.0 / 16.0,
             Roll::Delta(delta) if delta.get() == 3 => 4.0 / 16.0,
             Roll::Delta(delta) if delta.get() == 4 => 1.0 / 16.0,
             _ => unreachable!(),
-        }
+        })
+        .unwrap()
     }
 }
 

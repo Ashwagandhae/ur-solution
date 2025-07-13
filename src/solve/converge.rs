@@ -1,3 +1,6 @@
+use std::fmt::Display;
+
+use num_traits::Float;
 use rayon::prelude::*;
 
 use crate::{
@@ -8,12 +11,14 @@ use crate::{
     },
 };
 
-pub const THRESHOLD_DELTA: f32 = 1e-6;
+pub const THRESHOLD_DELTA_32: f32 = 1e-6;
+pub const THRESHOLD_DELTA_64: f64 = 1e-14;
 pub const GPU_THRESHOLD: usize = 50_000;
+pub const MAX_ITERS: usize = 2000;
 
 pub fn converge(
     states: &[GameStateSmall],
-    vals: &mut [f32],
+    vals: &mut [f64],
     dep_start: usize,
     start: usize,
     end: usize,
@@ -45,7 +50,7 @@ pub fn converge(
     }
 
     if vals.len() > GPU_THRESHOLD {
-        converge_gpu(
+        converge_gpu_f64(
             dep_start,
             dep_vals,
             vals,
@@ -54,11 +59,18 @@ pub fn converge(
             device_holder,
         );
     } else {
-        converge_cpu(dep_start, dep_vals, vals, &expr_parts, &expr_starts);
+        converge_cpu(
+            dep_start,
+            dep_vals,
+            vals,
+            &expr_parts,
+            &expr_starts,
+            THRESHOLD_DELTA_64,
+        );
     }
 }
 
-fn converge_gpu(
+fn converge_gpu_f32(
     dep_start: usize,
     dep_vals: &[f32],
     vals: &mut [f32],
@@ -83,23 +95,77 @@ fn converge_gpu(
         iters += 20;
         converger.converge(device_holder, 20, in_vals, out_vals);
         let delta = max_delta(in_vals, out_vals);
-        if delta <= THRESHOLD_DELTA {
+        if delta <= THRESHOLD_DELTA_32 {
             println!("final delta {} after {} iters", delta, iters);
+            break;
+        }
+        if iters > MAX_ITERS {
+            panic!("reached max iters: {}", MAX_ITERS);
             break;
         }
     }
 
     vals.copy_from_slice(out_vals);
 }
-
-fn converge_cpu(
+fn converge_gpu_f64(
     dep_start: usize,
-    dep_vals: &[f32],
-    vals: &mut [f32],
+    dep_vals: &[f64],
+    vals: &mut [f64],
     expr_parts: &[ExprPart],
     expr_starts: &[u32],
+    device_holder: &mut DeviceHolder,
 ) {
-    let mut out_vals: &mut [f32] = &mut vals.to_vec();
+    println!("using gpu...");
+    let dep_vals_f32: Vec<_> = dep_vals.iter().map(|f| *f as f32).collect();
+    let mut converger = Converger::new(
+        device_holder,
+        dep_start,
+        &dep_vals_f32,
+        vals.len(),
+        expr_parts,
+        expr_starts,
+    );
+    let in_vals = &mut vec![0.0; vals.len()];
+    let out_vals = &mut vec![0.0; vals.len()];
+
+    let mut iters = 0;
+    loop {
+        iters += 20;
+        converger.converge(device_holder, 20, in_vals, out_vals);
+        let delta = max_delta(in_vals, out_vals);
+        if delta <= THRESHOLD_DELTA_32 {
+            println!("switching to cpu");
+            break;
+        }
+        if iters > MAX_ITERS {
+            println!("reached max iters: {}", MAX_ITERS);
+            break;
+        }
+    }
+
+    for i in 0..vals.len() {
+        vals[i] = out_vals[i] as f64;
+    }
+
+    converge_cpu(
+        dep_start,
+        dep_vals,
+        vals,
+        expr_parts,
+        expr_starts,
+        THRESHOLD_DELTA_64,
+    );
+}
+
+fn converge_cpu<T: Float + Send + Sync + Display>(
+    dep_start: usize,
+    dep_vals: &[T],
+    vals: &mut [T],
+    expr_parts: &[ExprPart],
+    expr_starts: &[u32],
+    threshold_delta: T,
+) {
+    let mut out_vals: &mut [T] = &mut vals.to_vec();
     let mut in_vals = vals;
     let mut iters = 0;
     let mut swapped = false;
@@ -116,8 +182,12 @@ fn converge_cpu(
 
         let delta = max_delta(in_vals, out_vals);
 
-        if delta <= THRESHOLD_DELTA {
+        if delta <= threshold_delta {
             println!("final delta {} after {} iters", delta, iters);
+            break;
+        }
+        if iters > MAX_ITERS {
+            panic!("reached max iters: {}", MAX_ITERS);
             break;
         }
 
@@ -131,12 +201,12 @@ fn converge_cpu(
     }
 }
 
-pub fn step(
+pub fn step<T: Float + Send + Sync>(
     dep_start: usize,
 
-    dep_vals: &[f32],
-    in_vals: &[f32],
-    out_vals: &mut [f32],
+    dep_vals: &[T],
+    in_vals: &[T],
+    out_vals: &mut [T],
 
     expr_parts: &[ExprPart],
     expr_starts: &[u32],
@@ -154,9 +224,9 @@ pub fn step(
     });
 }
 
-pub fn max_delta(vals: &[f32], old_vals: &[f32]) -> f32 {
+pub fn max_delta<T: Float + Send + Sync>(vals: &[T], old_vals: &[T]) -> T {
     vals.par_iter()
         .zip(old_vals.par_iter())
-        .map(|(val, old_val)| (val - old_val).abs())
-        .reduce(|| 0.0, f32::max)
+        .map(|(val, old_val)| (*val - *old_val).abs())
+        .reduce(|| T::zero(), T::max)
 }

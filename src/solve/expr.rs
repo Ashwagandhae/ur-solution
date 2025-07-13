@@ -1,4 +1,5 @@
 use core::f64;
+use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::{
@@ -6,8 +7,10 @@ use crate::{
     save::read_or_create,
     successor::Succ,
 };
+use num_traits::Float;
+use rayon::prelude::*;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExprPart(u32);
 
 impl ExprPart {
@@ -67,6 +70,51 @@ pub enum Val {
     Var(u32),
 }
 
+// pub fn create_exprs(
+//     states: &[GameStateSmall],
+//     dep_start: usize,
+//     start: usize,
+//     end: usize,
+//     expr_parts: &mut Vec<ExprPart>,
+//     expr_starts: &mut Vec<u32>,
+// ) {
+//     println!("create exprs normal");
+//     for game in &states[start..end] {
+//         expr_starts.push(expr_parts.len().try_into().expect("expr index too big"));
+//         for roll in Roll::succ_iter() {
+//             let first_part_i = expr_parts.len(); // remember where this roll starts
+
+//             println!(
+//                 "iter len: {}",
+//                 PossibleMovesIter::new(GameState::from(*game), roll).count()
+//             );
+//             for mov in PossibleMovesIter::new(GameState::from(*game), roll) {
+//                 println!("got mov: {:?}", mov);
+//                 match mov {
+//                     Move::End => {
+//                         expr_parts.truncate(first_part_i);
+//                         expr_parts.push(ExprPart::new(true, false, Val::Win));
+//                         break;
+//                     }
+//                     Move::Continue { game, keep_turn } => {
+//                         let game = if keep_turn { game } else { game.flipped() };
+//                         let idx: u32 = ((&states[dep_start..end])
+//                             .binary_search(&GameStateSmall::from(game))
+//                             .unwrap()
+//                             + dep_start)
+//                             .try_into()
+//                             .expect("too many game states for u32");
+//                         expr_parts.push(ExprPart::new(false, !keep_turn, Val::Var(idx)));
+//                     }
+//                 }
+//             }
+
+//             let last = expr_parts.last_mut().unwrap();
+//             *last = ExprPart::new(true, last.is_inverse(), last.get_val());
+//         }
+//     }
+// }
+
 pub fn create_exprs(
     states: &[GameStateSmall],
     dep_start: usize,
@@ -75,61 +123,84 @@ pub fn create_exprs(
     expr_parts: &mut Vec<ExprPart>,
     expr_starts: &mut Vec<u32>,
 ) {
-    for game in &states[start..end] {
-        expr_starts.push(expr_parts.len().try_into().expect("expr index too big"));
-        for roll in Roll::succ_iter() {
-            let first_part_i = expr_parts.len(); // remember where this roll starts
+    let parts: Vec<_> = (&states[start..end])
+        .par_iter()
+        .flat_map_iter(|game| {
+            Roll::succ_iter().flat_map(|roll| {
+                let mut buf: [Option<ExprPart>; 7] = [None; 7];
+                let mut index = 0;
 
-            for mov in PossibleMovesIter::new(GameState::from(*game), roll) {
-                match mov {
-                    Move::End => {
-                        expr_parts.truncate(first_part_i);
-                        expr_parts.push(ExprPart::new(true, false, Val::Win));
-                        break;
-                    }
-                    Move::Continue { game, keep_turn } => {
-                        let game = if keep_turn { game } else { game.flipped() };
-                        let idx: u32 = ((&states[dep_start..end])
-                            .binary_search(&GameStateSmall::from(game))
-                            .unwrap()
-                            + dep_start)
-                            .try_into()
-                            .expect("too many game states for u32");
-                        expr_parts.push(ExprPart::new(false, !keep_turn, Val::Var(idx)));
+                for mov in PossibleMovesIter::new(GameState::from(*game), roll) {
+                    match mov {
+                        Move::End => {
+                            buf[0] = Some(ExprPart::new(true, false, Val::Win));
+                            buf[1] = None;
+
+                            return buf.into_iter().while_some();
+                        }
+                        Move::Continue { game, keep_turn } => {
+                            let game = if keep_turn { game } else { game.flipped() };
+                            let idx: u32 = ((&states[dep_start..end])
+                                .binary_search(&GameStateSmall::from(game))
+                                .unwrap()
+                                + dep_start)
+                                .try_into()
+                                .expect("too many game states for u32");
+                            buf[index] = Some(ExprPart::new(false, !keep_turn, Val::Var(idx)));
+                            index += 1;
+                        }
                     }
                 }
-            }
-
-            let last = expr_parts.last_mut().unwrap();
-            *last = ExprPart::new(true, last.is_inverse(), last.get_val());
+                let last = &mut buf[index - 1];
+                *last = Some(ExprPart::new(
+                    true,
+                    last.unwrap().is_inverse(),
+                    last.unwrap().get_val(),
+                ));
+                buf.into_iter().while_some()
+            })
+        })
+        .collect();
+    expr_parts.extend(parts);
+    let mut roll = 0;
+    for (i, part) in expr_parts.iter().enumerate() {
+        if roll % Roll::vals().len() == 0 {
+            expr_starts.push(i as u32);
+        }
+        if part.is_end() {
+            roll += 1;
         }
     }
 }
 
-pub fn eval_expr(
+pub fn eval_expr<T: Float>(
     expr_parts: &[ExprPart],
     first_part_index: usize,
-    get_val: impl Fn(usize) -> f32,
-) -> f32 {
+    get_val: impl Fn(usize) -> T,
+) -> T {
     let mut i = first_part_index;
     let mut current_roll = Some(Roll::first());
-    let mut sum: f32 = 0.0;
-    let mut current_max: f32 = f32::NEG_INFINITY;
+    let mut sum: T = T::zero();
+    let mut current_max: T = T::neg_infinity();
     while let Some(roll) = current_roll {
         let part = &expr_parts[i];
 
         let val = match part.get_val() {
-            Val::Win => 1.0,
+            Val::Win => T::one(),
             Val::Var(index) => get_val(index as usize),
         };
-        let val = if part.is_inverse() { 1.0 - val } else { val };
+        let val = if part.is_inverse() {
+            T::one() - val
+        } else {
+            val
+        };
 
         current_max = current_max.max(val);
 
         if part.is_end() {
-            sum += roll.weight() * current_max;
+            sum = sum + roll.weight::<T>() * current_max;
 
-            current_max = f32::NEG_INFINITY;
+            current_max = T::neg_infinity();
             current_roll = roll.succ();
         }
         i += 1;

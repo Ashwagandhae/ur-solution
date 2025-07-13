@@ -31,7 +31,7 @@ where
     result
 }
 
-pub fn solve() -> (Vec<GameStateSmall>, Vec<f32>) {
+pub fn solve() -> (Vec<GameStateSmall>, Vec<f64>) {
     let (states, perma_keys) = get_order();
     println!("number of states: {}", states.len());
     println!("number of perma keys: {}", perma_keys.len());
@@ -74,7 +74,7 @@ pub fn solve() -> (Vec<GameStateSmall>, Vec<f32>) {
     (states, vals)
 }
 
-pub fn save_vals(vals: &[f32], converge_count: usize) {
+pub fn save_vals(vals: &[f64], converge_count: usize) {
     println!("saving vals...");
     save::write(
         &format!("./data/vals_{}_{}.bin", GOAL_SCORE, converge_count),
