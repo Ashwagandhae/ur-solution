@@ -8,7 +8,7 @@ use crate::{
 
 pub mod strip;
 
-pub const GOAL_SCORE: u8 = 6;
+pub const GOAL_SCORE: u8 = 7;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Copy)]
 pub struct GameState {
