@@ -13,7 +13,7 @@ use crate::{
 
 pub const THRESHOLD_DELTA_32: f32 = 1e-6;
 pub const THRESHOLD_DELTA_64: f64 = 1e-14;
-pub const GPU_THRESHOLD: usize = 100_000;
+pub const GPU_THRESHOLD: usize = 100_000_000;
 pub const MAX_ITERS: usize = 2000;
 
 pub fn converge(
@@ -134,7 +134,7 @@ fn converge_gpu_f64(
         converger.converge(device_holder, 20, in_vals, out_vals);
         let delta = max_delta(in_vals, out_vals);
         if delta <= THRESHOLD_DELTA_32 {
-            println!("switching to cpu");
+            println!("switching to cpu after {} iters", iters);
             break;
         }
         if iters > MAX_ITERS {
