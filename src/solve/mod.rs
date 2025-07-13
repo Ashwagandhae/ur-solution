@@ -1,6 +1,5 @@
 use std::time::Instant;
 
-
 use crate::{
     game::{GameStateSmall, GOAL_SCORE},
     save,
@@ -38,32 +37,35 @@ pub fn solve() -> (Vec<GameStateSmall>, Vec<f64>) {
     let mut expr_parts = Vec::new();
     let mut expr_starts = Vec::new();
 
-    for (i, (key, range)) in perma_keys.iter().enumerate() {
-        let lowest_dep = perma_keys[..=i]
-            .iter()
-            .rev()
-            .filter(|(other_key, _)| other_key.reachable_in_one_move_from(*key))
-            .next_back()
-            .unwrap();
-        let dep_start = lowest_dep.1.start;
-        println!(
-            "dep score {} {}, score {} {}",
-            lowest_dep.0.team_gt.score,
-            lowest_dep.0.team_lt.score,
-            key.team_gt.score,
-            key.team_lt.score
-        );
-        converge(
-            &states,
-            &mut vals,
-            dep_start,
-            range.start,
-            range.end,
-            &mut device_holder,
-            &mut expr_parts,
-            &mut expr_starts,
-        );
-    }
+    time_it("converge loop", || {
+        for (i, (key, range)) in perma_keys.iter().enumerate() {
+            let lowest_dep = perma_keys[..=i]
+                .iter()
+                .rev()
+                .filter(|(other_key, _)| other_key.reachable_in_one_move_from(*key))
+                .next_back()
+                .unwrap();
+            let dep_start = lowest_dep.1.start;
+            println!(
+                "dep score {} {}, score {} {}",
+                lowest_dep.0.team_gt.score,
+                lowest_dep.0.team_lt.score,
+                key.team_gt.score,
+                key.team_lt.score
+            );
+            converge(
+                &states,
+                &mut vals,
+                dep_start,
+                range.start,
+                range.end,
+                &mut device_holder,
+                &mut expr_parts,
+                &mut expr_starts,
+            );
+        }
+    });
+
     save_vals(&vals, 0);
 
     (states, vals)

@@ -12,7 +12,7 @@ use crate::{
 };
 
 pub const THRESHOLD_DELTA_32: f32 = 1e-6;
-pub const THRESHOLD_DELTA_64: f64 = 1e-14;
+pub const THRESHOLD_DELTA_64: f64 = 1e-15;
 pub const GPU_THRESHOLD: usize = 100_000_000;
 pub const MAX_ITERS: usize = 2000;
 
