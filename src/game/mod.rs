@@ -39,7 +39,6 @@ impl Ord for GameStateSmall {
         PermaKey::new(GameState::from(*self))
             .cmp(&PermaKey::new(GameState::from(*other)))
             .then_with(|| self.0.cmp(&other.0))
-            .reverse()
     }
 }
 impl From<GameState> for GameStateSmall {
@@ -265,7 +264,7 @@ impl Roll {
         Self::vals().get(index).cloned()
     }
 
-    pub fn weight(&self) -> f64 {
+    pub fn weight(&self) -> f32 {
         match self {
             Roll::Zero => 1.0 / 16.0,
             Roll::Delta(delta) if delta.get() == 1 => 4.0 / 16.0,

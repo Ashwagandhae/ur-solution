@@ -8,10 +8,10 @@ use crate::{
     successor::Succ,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub struct PermaKey {
-    team_gt: PermaTeamKey,
-    team_lt: PermaTeamKey,
+    pub team_gt: PermaTeamKey,
+    pub team_lt: PermaTeamKey,
     max_token: MaxToken,
 }
 
@@ -33,6 +33,39 @@ impl PermaKey {
             team_lt,
             max_token,
         }
+    }
+
+    pub fn reachable_in_one_move_from(&self, other: PermaKey) -> bool {
+        match (
+            self.team_gt.score.checked_sub(other.team_gt.score),
+            self.team_lt.score.checked_sub(other.team_lt.score),
+        ) {
+            (Some(0), Some(0)) | (Some(1), Some(0)) | (Some(0), Some(1)) => true,
+            _ => false,
+        }
+    }
+}
+
+impl From<GameState> for PermaKey {
+    fn from(value: GameState) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&GameState> for PermaKey {
+    fn from(value: &GameState) -> Self {
+        Self::new(*value)
+    }
+}
+
+impl From<GameStateSmall> for PermaKey {
+    fn from(value: GameStateSmall) -> Self {
+        Self::new(GameState::from(value))
+    }
+}
+impl From<&GameStateSmall> for PermaKey {
+    fn from(value: &GameStateSmall) -> Self {
+        Self::new(GameState::from(*value))
     }
 }
 
@@ -58,6 +91,7 @@ impl Ord for PermaKey {
                 other.team_lt.strip_end,
                 other.max_token,
             ))
+            .reverse()
     }
 }
 
@@ -161,9 +195,9 @@ impl PartialOrd for MaxToken {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub struct PermaTeamKey {
-    score: u8,
+    pub score: u8,
     strip_end: u8,
 }
 

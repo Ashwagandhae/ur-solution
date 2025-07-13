@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::solve::solve;
+use crate::{game::GameState, render::render, solve::solve};
 
 mod game;
 mod play;
@@ -19,18 +19,18 @@ pub fn input() -> String {
 fn main() {
     env_logger::init();
 
-    solve();
-    // loop {
-    //     println!("Choose state to view: ");
-    //     let Ok(index) = input().parse::<usize>() else {
-    //         continue;
-    //     };
-    //     if index > states.len() {
-    //         continue;
-    //     }
-    //     let game = states[index];
-    //     let val = table.vals[index];
-    //     println!("{}", render(&game));
-    //     println!("val: {val}",);
-    // }
+    let (states, vals) = solve();
+    loop {
+        println!("Choose state to view: ");
+        let Ok(index) = input().parse::<usize>() else {
+            continue;
+        };
+        if index > states.len() {
+            continue;
+        }
+        let game = states[index];
+        let val = vals[index];
+        println!("{}", render(&GameState::from(game)));
+        println!("val: {val}",);
+    }
 }

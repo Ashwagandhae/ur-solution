@@ -2,7 +2,7 @@ use core::f64;
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::{
-    game::{GameState, Move, PossibleMovesIter, Roll, GOAL_SCORE},
+    game::{GameState, GameStateSmall, Move, PossibleMovesIter, Roll, GOAL_SCORE},
     save::read_or_create,
     successor::Succ,
 };
@@ -67,43 +67,20 @@ pub enum Val {
     Var(u32),
 }
 
-pub fn get_exprs(
-    state_indices: &HashMap<GameState, u32>,
-    states: &[GameState],
-) -> (Vec<ExprPart>, Vec<u32>) {
-    read_or_create(
-        &format!("./data/exprs_{}.bin", GOAL_SCORE),
-        || create_exprs(state_indices, states),
-        |(expr_parts, expr_starts)| {
-            (
-                expr_parts.iter().cloned().map(u32::from).collect(),
-                expr_starts.clone(),
-            )
-        },
-        |(parts, expr_starts): &(Vec<_>, _)| {
-            (
-                parts.iter().cloned().map(ExprPart::from).collect(),
-                expr_starts.clone(),
-            )
-        },
-    )
-}
-
-fn create_exprs(
-    state_indices: &HashMap<GameState, u32>,
-    states: &[GameState],
-) -> (Vec<ExprPart>, Vec<u32>) {
-    let mut expr_parts = Vec::new();
-    let mut expr_starts = Vec::new();
-    for (i, game) in states.iter().enumerate() {
-        if i % 1_000_000 == 0 {
-            println!("created {} expr parts for {} states", expr_parts.len(), i);
-        }
+pub fn create_exprs(
+    states: &[GameStateSmall],
+    dep_start: usize,
+    start: usize,
+    end: usize,
+    expr_parts: &mut Vec<ExprPart>,
+    expr_starts: &mut Vec<u32>,
+) {
+    for game in &states[start..end] {
         expr_starts.push(expr_parts.len().try_into().expect("expr index too big"));
         for roll in Roll::succ_iter() {
             let first_part_i = expr_parts.len(); // remember where this roll starts
 
-            for mov in PossibleMovesIter::new(*game, roll) {
+            for mov in PossibleMovesIter::new(GameState::from(*game), roll) {
                 match mov {
                     Move::End => {
                         expr_parts.truncate(first_part_i);
@@ -111,7 +88,13 @@ fn create_exprs(
                         break;
                     }
                     Move::Continue { game, keep_turn } => {
-                        let idx = state_indices[&if keep_turn { game } else { game.flipped() }];
+                        let game = if keep_turn { game } else { game.flipped() };
+                        let idx: u32 = ((&states[dep_start..end])
+                            .binary_search(&GameStateSmall::from(game))
+                            .unwrap()
+                            + dep_start)
+                            .try_into()
+                            .expect("too many game states for u32");
                         expr_parts.push(ExprPart::new(false, !keep_turn, Val::Var(idx)));
                     }
                 }
@@ -121,25 +104,23 @@ fn create_exprs(
             *last = ExprPart::new(true, last.is_inverse(), last.get_val());
         }
     }
-    (expr_parts, expr_starts)
 }
 
 pub fn eval_expr(
-    expr_index: usize,
     expr_parts: &[ExprPart],
-    expr_starts: &[u32],
-    vals: &[f64],
-) -> f64 {
-    let mut i = expr_starts[expr_index] as usize;
+    first_part_index: usize,
+    get_val: impl Fn(usize) -> f32,
+) -> f32 {
+    let mut i = first_part_index;
     let mut current_roll = Some(Roll::first());
-    let mut sum: f64 = 0.0;
-    let mut current_max: f64 = f64::NEG_INFINITY;
+    let mut sum: f32 = 0.0;
+    let mut current_max: f32 = f32::NEG_INFINITY;
     while let Some(roll) = current_roll {
         let part = &expr_parts[i];
 
         let val = match part.get_val() {
             Val::Win => 1.0,
-            Val::Var(index) => vals[index as usize],
+            Val::Var(index) => get_val(index as usize),
         };
         let val = if part.is_inverse() { 1.0 - val } else { val };
 
@@ -148,7 +129,7 @@ pub fn eval_expr(
         if part.is_end() {
             sum += roll.weight() * current_max;
 
-            current_max = f64::NEG_INFINITY;
+            current_max = f32::NEG_INFINITY;
             current_roll = roll.succ();
         }
         i += 1;
